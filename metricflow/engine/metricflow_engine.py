@@ -446,6 +446,7 @@ class MetricFlowEngine(AbstractMetricFlowEngine):
         query_parser: Optional[MetricFlowQueryParser] = None,
         column_association_resolver: Optional[ColumnAssociationResolver] = None,
         consistent_id_enumeration: Optional[bool] = True,
+        factory_advanced_queries: Optional[Sequence[dict]] = None,
     ) -> None:
         """Initializer for MetricFlowEngine.
 
@@ -460,6 +461,11 @@ class MetricFlowEngine(AbstractMetricFlowEngine):
         These parameters are mainly there to be overridden during tests.
         """
         self._reset_id_enumeration = consistent_id_enumeration
+        from metricflow.engine.factory_advanced_plans import FactoryAdvancedPlanCompiler
+
+        self._factory_advanced_queries = FactoryAdvancedPlanCompiler.validate_definitions(
+            factory_advanced_queries or ()
+        )
         if self._reset_id_enumeration:
             # Some of the objects that are created below use generated IDs. To avoid collision with IDs that are
             # generated for queries, set the ID generation numbering to start at a high enough number.
@@ -520,6 +526,9 @@ class MetricFlowEngine(AbstractMetricFlowEngine):
 
     @log_call(module_name=__name__, telemetry_reporter=_telemetry_reporter)
     def query(self, mf_request: MetricFlowQueryRequest) -> MetricFlowQueryResult:  # noqa: D102
+        names = tuple(mf_request.metric_names or ())
+        if len(names) == 1 and names[0] in self._factory_advanced_queries:
+            return self._query_factory_advanced(names[0], mf_request)
         logger.info(LazyFormat("Starting query request", mf_request=mf_request))
         explain_result = self._create_execution_plan(mf_request)
         execution_plan = explain_result.convert_to_execution_plan_result.execution_plan
@@ -547,6 +556,36 @@ class MetricFlowEngine(AbstractMetricFlowEngine):
             sql=task_execution_result.sql,
             result_df=task_execution_result.df,
             result_table=explain_result.output_table,
+        )
+
+    def _query_factory_advanced(self, name: str, request: MetricFlowQueryRequest) -> MetricFlowQueryResult:
+        """Compile a manifest-backed second aggregation stage within MetricFlow."""
+        from metricflow.engine.factory_advanced_plans import FactoryAdvancedPlanCompiler
+        from metricflow.sql.sql_plan import SqlPlan
+
+        if request.group_by_names or request.where_constraints or request.order_by_names or request.limit:
+            raise InvalidQueryException("Advanced semantic plans accept only their manifest-defined query parameters")
+        definition = self._factory_advanced_queries[name]
+        base_request = MetricFlowQueryRequest.create(
+            metric_names=definition.base_metrics,
+            group_by_names=definition.group_by,
+            where_constraints=definition.where,
+            output_column_order_mode=OutputColumnOrderMode.INPUT_ORDER,
+        )
+        base_explain = self._create_execution_plan(base_request)
+        converted = self._to_sql_plan_converter.convert_to_sql_plan(
+            sql_engine_type=self._sql_client.sql_engine_type,
+            dataflow_plan_node=base_explain.dataflow_plan.sink_node,
+            output_column_orderer=InputOrderPreservingOrderer(base_explain.query_spec.input_spec_order),
+        )
+        node = FactoryAdvancedPlanCompiler().compile(name, converted.sql_plan.render_node)
+        rendered = self._sql_client.sql_plan_renderer.render_sql_plan(SqlPlan(node))
+        result = self._sql_client.query(rendered.sql, rendered.bind_parameter_set)
+        return MetricFlowQueryResult(
+            query_spec=base_explain.query_spec,
+            dataflow_plan=base_explain.dataflow_plan,
+            sql=rendered.sql,
+            result_df=result,
         )
 
     @property

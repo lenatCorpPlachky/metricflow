@@ -654,6 +654,7 @@ class SqlComparison(Enum):  # noqa: D101
     LESS_THAN_OR_EQUALS = "<="
     GREATER_THAN_OR_EQUALS = ">="
     EQUALS = "="
+    NOT_EQUALS = "<>"
 
 
 @dataclass(frozen=True, eq=False)
@@ -739,6 +740,7 @@ class SqlFunction(Enum):
     MAX = "MAX"
     MIN = "MIN"
     SUM = "SUM"
+    STDDEV_POP = "STDDEV_POP"
 
     # Field management functions
     COALESCE = "COALESCE"
@@ -772,6 +774,7 @@ class SqlFunction(Enum):
             SqlFunction.MAX,
             SqlFunction.MIN,
             SqlFunction.SUM,
+            SqlFunction.STDDEV_POP,
         )
 
     @staticmethod
@@ -1059,6 +1062,7 @@ class SqlWindowFunction(Enum):
     FIRST_VALUE = "FIRST_VALUE"
     LAST_VALUE = "LAST_VALUE"
     AVERAGE = "AVG"
+    SUM = "SUM"
     ROW_NUMBER = "ROW_NUMBER"
     LEAD = "LEAD"
 
@@ -1072,7 +1076,7 @@ class SqlWindowFunction(Enum):
             or self is SqlWindowFunction.LEAD
         ):
             return True
-        elif self is SqlWindowFunction.AVERAGE:
+        elif self is SqlWindowFunction.AVERAGE or self is SqlWindowFunction.SUM:
             return False
         else:
             assert_values_exhausted(self)
@@ -1084,6 +1088,7 @@ class SqlWindowFunction(Enum):
             self is SqlWindowFunction.FIRST_VALUE
             or self is SqlWindowFunction.LAST_VALUE
             or self is SqlWindowFunction.AVERAGE
+            or self is SqlWindowFunction.SUM
         ):
             return True
         if self is SqlWindowFunction.ROW_NUMBER or self is SqlWindowFunction.LEAD:
